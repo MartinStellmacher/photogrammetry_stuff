@@ -13,8 +13,8 @@ cv2.aruco.DICT_6X6_250, IDs 40-48
     measured in PhotoShop:
         long (8608-250)/300*2,54/8        1044,75 => 88,4555 mm
         short (5564-341)/300*2,54/5        1044,6 => 88,4428 mm
-##Experiments
-###Aruco
+## Experiments
+### Aruco
 ToDo: Marker need a white boarder of at least the same width as the black boarder !!!
 
 ### Chessboard
