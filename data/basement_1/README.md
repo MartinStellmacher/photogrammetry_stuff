@@ -3,7 +3,7 @@
 Zeiss Batis 18mm, focus fixed at 2m, 24*36 mm², 7952x5304
 ## Aruco Marker
 cv2.aruco.DICT_6X6_250, IDs 40-48
-##Charuco Board
+## Charuco Board
     cv2.aruco.DICT_4X4_50
     board size [fields] 5x8
     IDs 0-19
@@ -35,6 +35,7 @@ Reprojectionerror reported by cv2.calibrateCamera(): 0.4484306472864837
 
 ### Charuco
 #### Charuco 1/4 size
+    (1988, 1326)
     0.1544299370880001
     [[1.03185816e+03 0.00000000e+00 9.93933319e+02]
      [0.00000000e+00 1.03185816e+03 6.66786321e+02]
@@ -43,7 +44,6 @@ Reprojectionerror reported by cv2.calibrateCamera(): 0.4484306472864837
 
 #### Charuco full size
     (7952, 5304)
-    [3976. 2652.]
     0.5912173034174356
     [[4.12269741e+03 0.00000000e+00 3.97812095e+03]
      [0.00000000e+00 4.12269741e+03 2.67010659e+03]
