@@ -38,9 +38,6 @@ def detect_corners(images, h_corners, v_corners):
             idx = pd.MultiIndex.from_product([[fname], img_pt_df.index], names=['image_file', 'point_idx'])
             i_df = pd.concat([img_pt_df, obj_pt_df], axis=1).set_index(idx)
             result = pd.concat([result, i_df])
-            # img_name_s = pd.Series([fname]*len(objp), name='img_name')
-            # i_df = pd.concat([img_name_s, img_pt_df, obj_pt_df], axis=1)
-            # result = pd.concat([result, i_df], ignore_index=True)
         else:
             print(f'{fname} failed')
     cv2.destroyAllWindows()
@@ -60,57 +57,55 @@ def calibrate_chessboard( size, points):
                                  [    0., 1000., size[1]/2.],
                                  [    0.,    0.,           1.]])
     # perform calibration
-    rpe, mtx, dist, rvecs, tvecs, stddev_intrinsics, stddev_extrinsics, per_view_error = cv2.calibrateCamera(objpoints, imgpoints, tuple( size), cameraMatrixInit, None, flags = cv2.CALIB_FIX_ASPECT_RATIO)
+    rpe, mtx, dist, rvecs, tvecs, stddev_intrinsics, stddev_extrinsics, per_view_error = cv2.calibrateCameraExtended(objpoints, imgpoints, tuple( size), cameraMatrixInit, None, flags = cv2.CALIB_FIX_ASPECT_RATIO)
     # optimize image size
     newcameramtx, roi=cv2.getOptimalNewCameraMatrix(mtx, dist, tuple(size), 1, tuple(size))
     # collect result
-    # stddev_intrinsics (18, 1) fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6, s1, s2, s3, s4, τx, τy
-    # stddev_extrinsics (360, 1) R0,T0,…,RM−1,TM−1
-    vecs = None
+    stddev_extrinsics = stddev_extrinsics.reshape((-1, 2, 3))
+    extrinsics = None
     for idx, _ in enumerate(image_names):
         i_df = pd.concat([pd.DataFrame([tvecs[idx].reshape(-1)], columns=['tx', 'ty', 'tz']),
                           pd.DataFrame([rvecs[idx].reshape(-1)], columns=['rx', 'ry', 'rz']),
+                          pd.DataFrame([stddev_extrinsics[idx, 1]], columns=['stddev_tx', 'stddev_ty', 'stddev_tz']),
+                          pd.DataFrame([stddev_extrinsics[idx, 0]], columns=['stddev_rx', 'stddev_ry', 'stddev_rz']),
                           pd.DataFrame([per_view_error[idx]], columns=['rpe'])], axis=1)
-        vecs = pd.concat([vecs, i_df])
-    vecs = vecs.set_index(image_names)
-    intrinsics = pd.DataFrame([np.concatenate([[mtx[0,0], mtx[1,1], mtx[0,2], mtx[1,2]], dist[0]]), stddev_intrinsics.reshape(-1)[:9]], columns=['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3'], index=['value', 'std_dev'])
+        extrinsics = pd.concat([extrinsics, i_df])
+    extrinsics = extrinsics.set_index(image_names)
+    intrinsics = pd.DataFrame([np.concatenate([[mtx[0,0], mtx[1,1], mtx[0,2], mtx[1,2]], dist[0]]), stddev_intrinsics.reshape(-1)[:9]], columns=['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3'], index=['value', 'stddev'])
+    return intrinsics, extrinsics, pd.DataFrame(newcameramtx, columns=['fx', 'fy', 'c']), pd.Series(roi, index=['x', 'y', 'w', 'h'], name='roi')
 
-    return rpe, pd.DataFrame(mtx, columns=['fx', 'fy', 'c']), pd.Series(dist[0], name='distortion'), vecs,\
-           pd.DataFrame(newcameramtx, columns=['fx', 'fy', 'c']), pd.Series(roi, index=['x', 'y', 'w', 'h'], name='roi')
 
 point_store = 'data/basement_1/chessboard_calib/corners.h5'
+calibration_store = 'data/basement_1/chessboard_calib/calib.h5'
+
 if os.path.exists(point_store):
     size = pd.read_hdf(point_store, 'size')
     points = pd.read_hdf(point_store, 'points')
 else:
     size, points = detect_corners(glob.glob(r"data/basement_1/images/*.JPG"), 7, 4)
-    size.to_hdf(point_store, 'size')
-    points.to_hdf(point_store, 'points')
+    size.to_hdf(point_store, 'size', mode='w')
+    points.to_hdf(point_store, 'points', mode='a')
+if os.path.exists(calibration_store):
+    intrinsics = pd.read_hdf(calibration_store, 'intrinsics')
+    extrinsics = pd.read_hdf(calibration_store, 'extrinsics')
+    newcameramtx = pd.read_hdf(calibration_store, 'newcameramtx')
+    roi = pd.read_hdf(calibration_store, 'roi')
+else:
+    intrinsics, extrinsics, newcameramtx, roi = calibrate_chessboard(size, points)
+    intrinsics.to_hdf(calibration_store, 'intrinsics', mode='w')
+    extrinsics.to_hdf(calibration_store, 'extrinsics', mode='a')
+    newcameramtx.to_hdf(calibration_store, 'newcameramtx', mode='a')
+    roi.to_hdf(calibration_store, 'roi', mode='a')
 
-rpe, mtx, dist, vecs, newcameramtx, roi = calibrate_chessboard(size, points)
+print( f"Reprojectionerror reported by cv2.calibrateCamera(): {(np.power(extrinsics.rpe,2).sum()/len(extrinsics))**0.5}")
 
-# calibration_store = 'data/basement_1/chessboard_calib/calib.h5'
-# if os.path.exists(calibration_store):
-#     with open('data/basement_1/chessboard_calib/chessboard_calib.pkl', 'rb') as f:
-#         rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = pickle.load(f)
-# else:
-#     rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = calibrate_chessboard(size, points)
-#     with open('data/basement_1/chessboard_calib/chessboard_calib.pkl', 'wb') as f:
-#         pickle.dump((rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi), f)
-
-print( f"Reprojectionerror reported by cv2.calibrateCamera(): {rpe}")
-
-print(size)
-print(mtx)
-print(dist)
-
-mean_error = 0
-for i in range(len(objpoints)):
-    imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
-    error = cv2.norm(imgpoints[i],imgpoints2, cv2.NORM_L2)/len(imgpoints2)
-    mean_error += error
-    print(error)
-print( f"total error: {mean_error/len(objpoints)}")
+# mean_error = 0
+# for i in range(len(objpoints)):
+#     imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+#     error = cv2.norm(imgpoints[i],imgpoints2, cv2.NORM_L2)/len(imgpoints2)
+#     mean_error += error
+#     print(error)
+# print( f"total error: {mean_error/len(objpoints)}")
 
 
 
