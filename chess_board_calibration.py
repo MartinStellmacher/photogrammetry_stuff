@@ -2,76 +2,101 @@ import numpy as np
 import cv2
 import glob
 import os
-import pickle
+import pandas as pd
+
 
 def detect_corners(images, h_corners, v_corners):
-    # termination criteria
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
     # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-    objp = np.zeros((v_corners*h_corners,3), np.float32)
-    objp[:,:2] = np.mgrid[0:h_corners,0:v_corners].T.reshape(-1,2)
-
-    # Arrays to store object points and image points from all the images.
-    objpoints = [] # 3d point in real world space
-    imgpoints = [] # 2d points in image plane.
-    img_names = []
+    objp = np.zeros((v_corners * h_corners, 3), np.float32)
+    objp[:, :2] = np.mgrid[0:h_corners, 0:v_corners].T.reshape(-1, 2)
+    im_size = None
+    result = None
 
     for fname in images:
-        img = cv2.imread(fname, flags=cv2.IMREAD_IGNORE_ORIENTATION | cv2.IMREAD_COLOR)
-
+        # read all images in the same orientation
+        img = cv2.imread(fname, flags=cv2.IMREAD_IGNORE_ORIENTATION | cv2.IMREAD_GRAYSCALE)
+        # downscale because findChessboardCorners can't handle multi megapixel images :(
         img = cv2.resize(img, (int(img.shape[1] / 4), int(img.shape[0] / 4)))
-
-        gray = cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
-
+        # remember and check the size
+        if im_size is None:
+            im_size = img.shape[::-1]
+        else:
+            assert im_size == img.shape[::-1]
         # Find the chess board corners
-        ret, corners = cv2.findChessboardCorners(gray, (h_corners,v_corners),None)
-
+        ret, corners = cv2.findChessboardCorners(img, (h_corners, v_corners), None)
         # If found, add object points, image points (after refining them)
         if ret == True:
-            img_names.append(fname)
-            objpoints.append(objp)
-
-            corners2 = cv2.cornerSubPix(gray,corners,(11,11),(-1,-1),criteria)
-            imgpoints.append(corners2)
-
-            # Draw and display the corners
-            img = cv2.drawChessboardCorners(img, (h_corners,v_corners), corners2,ret)
-
-            cv2.imshow('img',img)
+            corners2 = cv2.cornerSubPix(img, corners, (11, 11), (-1, -1),
+                                        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+            # draw and display the corners
+            img = cv2.drawChessboardCorners(img, (h_corners, v_corners), corners2, ret)
+            cv2.imshow('img', img)
             cv2.waitKey(500)
+            # combine result
+            img_pt_df = pd.DataFrame(corners2.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'])
+            obj_pt_df = pd.DataFrame(objp, columns=['obj_pt_x', 'obj_pt_y', 'obj_pt_z'])
+            idx = pd.MultiIndex.from_product([[fname], img_pt_df.index], names=['image_file', 'point_idx'])
+            i_df = pd.concat([img_pt_df, obj_pt_df], axis=1).set_index(idx)
+            result = pd.concat([result, i_df])
+            # img_name_s = pd.Series([fname]*len(objp), name='img_name')
+            # i_df = pd.concat([img_name_s, img_pt_df, obj_pt_df], axis=1)
+            # result = pd.concat([result, i_df], ignore_index=True)
         else:
             print(f'{fname} failed')
-
     cv2.destroyAllWindows()
+    return pd.Series(im_size, index = ['width', 'height']), result
 
-    return gray.shape[::-1], objpoints, imgpoints, img_names
 
-
-def calibrate_chessboard(size, objpoints, imgpoints):
+def calibrate_chessboard( size, points):
+    # convert dataframe to cv2 format
+    objpoints = []
+    imgpoints = []
+    image_names = points.index.get_level_values(0).unique()
+    for img in image_names:
+        img_pts = points.loc[img]
+        objpoints.append( img_pts[['obj_pt_x','obj_pt_y','obj_pt_z']].to_numpy())
+        imgpoints.append( img_pts[['img_pt_x','img_pt_y']].to_numpy().reshape((-1,1,2)))
     cameraMatrixInit = np.array([[ 1000.,    0., size[0]/2.],
                                  [    0., 1000., size[1]/2.],
                                  [    0.,    0.,           1.]])
-    rpe, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, size, cameraMatrixInit, None, flags = cv2.CALIB_FIX_ASPECT_RATIO)
-    newcameramtx, roi=cv2.getOptimalNewCameraMatrix(mtx, dist, size, 1, size)
-    return rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi
+    # perform calibration
+    rpe, mtx, dist, rvecs, tvecs, stddev_intrinsics, stddev_extrinsics, per_view_error = cv2.calibrateCamera(objpoints, imgpoints, tuple( size), cameraMatrixInit, None, flags = cv2.CALIB_FIX_ASPECT_RATIO)
+    # optimize image size
+    newcameramtx, roi=cv2.getOptimalNewCameraMatrix(mtx, dist, tuple(size), 1, tuple(size))
+    # collect result
+    # stddev_intrinsics (18, 1) fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6, s1, s2, s3, s4, τx, τy
+    # stddev_extrinsics (360, 1) R0,T0,…,RM−1,TM−1
+    vecs = None
+    for idx, _ in enumerate(image_names):
+        i_df = pd.concat([pd.DataFrame([tvecs[idx].reshape(-1)], columns=['tx', 'ty', 'tz']),
+                          pd.DataFrame([rvecs[idx].reshape(-1)], columns=['rx', 'ry', 'rz']),
+                          pd.DataFrame([per_view_error[idx]], columns=['rpe'])], axis=1)
+        vecs = pd.concat([vecs, i_df])
+    vecs = vecs.set_index(image_names)
+    intrinsics = pd.DataFrame([np.concatenate([[mtx[0,0], mtx[1,1], mtx[0,2], mtx[1,2]], dist[0]]), stddev_intrinsics.reshape(-1)[:9]], columns=['fx', 'fy', 'cx', 'cy', 'k1', 'k2', 'p1', 'p2', 'k3'], index=['value', 'std_dev'])
 
+    return rpe, pd.DataFrame(mtx, columns=['fx', 'fy', 'c']), pd.Series(dist[0], name='distortion'), vecs,\
+           pd.DataFrame(newcameramtx, columns=['fx', 'fy', 'c']), pd.Series(roi, index=['x', 'y', 'w', 'h'], name='roi')
 
-if os.path.exists('chessboard_corners.pkl'):
-    with open('chessboard_corners.pkl', 'rb') as f:
-        size, objpoints, imgpoints, img_names = pickle.load(f)
+point_store = 'data/basement_1/chessboard_calib/corners.h5'
+if os.path.exists(point_store):
+    size = pd.read_hdf(point_store, 'size')
+    points = pd.read_hdf(point_store, 'points')
 else:
-    size, objpoints, imgpoints, img_names = detect_corners(glob.glob(r"C:\Users\stelli\Desktop\Photogrammetrie\data\basement_1\*.JPG"), 7, 4)
-    with open('chessboard_corners.pkl', 'wb') as f:
-        pickle.dump((size, objpoints, imgpoints, img_names), f)
+    size, points = detect_corners(glob.glob(r"data/basement_1/images/*.JPG"), 7, 4)
+    size.to_hdf(point_store, 'size')
+    points.to_hdf(point_store, 'points')
 
-if os.path.exists('chessboard_calib.pkl'):
-    with open('chessboard_calib.pkl', 'rb') as f:
-        rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = pickle.load(f)
-else:
-    rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = calibrate_chessboard(size, objpoints, imgpoints)
-    with open('chessboard_calib.pkl', 'wb') as f:
-        pickle.dump((rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi), f)
+rpe, mtx, dist, vecs, newcameramtx, roi = calibrate_chessboard(size, points)
+
+# calibration_store = 'data/basement_1/chessboard_calib/calib.h5'
+# if os.path.exists(calibration_store):
+#     with open('data/basement_1/chessboard_calib/chessboard_calib.pkl', 'rb') as f:
+#         rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = pickle.load(f)
+# else:
+#     rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi = calibrate_chessboard(size, points)
+#     with open('data/basement_1/chessboard_calib/chessboard_calib.pkl', 'wb') as f:
+#         pickle.dump((rpe, mtx, dist, rvecs, tvecs, newcameramtx, roi), f)
 
 print( f"Reprojectionerror reported by cv2.calibrateCamera(): {rpe}")
 
