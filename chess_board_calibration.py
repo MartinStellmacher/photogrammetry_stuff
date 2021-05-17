@@ -3,21 +3,18 @@ import cv2
 import glob
 import os
 import pandas as pd
+import utilities
 import matplotlib.pyplot as plt
 
 
-def detect_corners(images, h_corners, v_corners, square_width, img_scale, corner_images = None):
+def detect_corners(images, h_corners, v_corners, square_width, img_scale):
     # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
     objp = np.zeros((v_corners * h_corners, 3), np.float32)
     objp[:, :2] = np.mgrid[0:h_corners, 0:v_corners].T.reshape(-1, 2) * square_width
     im_size = None
     result = None
     for fname in images:
-        # read all images in the same orientation
-        img = cv2.imread(fname, flags=cv2.IMREAD_IGNORE_ORIENTATION | cv2.IMREAD_GRAYSCALE)
-        # downscale because findChessboardCorners can't handle multi megapixel images :(
-        if img_scale != 1:
-            img = cv2.resize(img, (int(img.shape[1] * img_scale), int(img.shape[0] * img_scale)))
+        img = utilities.read_scaled_image(fname, img_scale)
         # remember and check the size
         if im_size is None:
             im_size = img.shape[::-1]
@@ -29,9 +26,6 @@ def detect_corners(images, h_corners, v_corners, square_width, img_scale, corner
         if ret == True:
             corners2 = cv2.cornerSubPix(img, corners, (11, 11), (-1, -1),
                                         (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            if corner_images is not None:
-                corner_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                corner_images.append(cv2.drawChessboardCorners(corner_img, (h_corners, v_corners), corners2, ret))
             img_pt_df = pd.DataFrame(corners2.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'])
             obj_pt_df = pd.DataFrame(objp, columns=['obj_pt_x', 'obj_pt_y', 'obj_pt_z'])
             idx = pd.MultiIndex.from_product([[fname], img_pt_df.index], names=['image_file', 'point_idx'])
@@ -73,12 +67,12 @@ def calibrate_chessboard( size, points):
     return intrinsics, extrinsics, pd.DataFrame(newcameramtx, columns=['fx', 'fy', 'c']), pd.Series(roi, index=['x', 'y', 'w', 'h'], name='roi')
 
 
-def perform_calibration( images, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0, corner_images=None):
+def perform_calibration(images, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0):
     if os.path.exists(point_store):
         size = pd.read_hdf(point_store, 'size')
         points = pd.read_hdf(point_store, 'points')
     else:
-        size, points = detect_corners(glob.glob( images), board_width, board_height, square_width, image_scaling, corner_images)
+        size, points = detect_corners(images, board_width, board_height, square_width, image_scaling)
         if point_store != '':
             size.to_hdf(point_store, 'size', mode='w')
             points.to_hdf(point_store, 'points', mode='a')
@@ -97,31 +91,16 @@ def perform_calibration( images, board_width, board_height, square_width, point_
     return intrinsics, extrinsics, size, points, newcameramtx, roi
 
 
-def intrinsics_to_mtx_and_dist( intrinsics):
-    mtx = np.array([[intrinsics.fx.value, 0., intrinsics.cx.value],
-                    [0., intrinsics.fy.value, intrinsics.cy.value],
-                    [0., 0., 1.]])
-    dist = np.array([intrinsics.k1.value, intrinsics.k2.value, intrinsics.p1.value, intrinsics.p2.value, intrinsics.k3.value])
-    return mtx, dist
-
-
-def calculate_reprojection_error(intrinsics, extrinsics, points):
-    mean_error = 0
-    mtx, dist = intrinsics_to_mtx_and_dist(intrinsics)
-    for index, row in extrinsics.iterrows():
-        imgpoints2, _ = cv2.projectPoints(points.loc[index][['obj_pt_x', 'obj_pt_y', 'obj_pt_z']].to_numpy(), row[['rx','ry','rz']].to_numpy(), row[['tx','ty','tz']].to_numpy(), mtx, dist)
-        # don't use NORM_L2 here, because it takes the root which we would square next ...
-        mean_error +=  np.sum(np.sum(np.square(points.loc[index][['img_pt_x', 'img_pt_y']].to_numpy() - imgpoints2.reshape((-1,2))), axis=1))/len(imgpoints2)
-    # the result is the same as Reprojectionerror reported by cv2.calibrateCamera(): (np.power(extrinsics.rpe,2).sum()/len(extrinsics))**0.5
-    return (mean_error/len(extrinsics))**0.5
+def calibration_main(image_path, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0):
+    images = glob.glob(image_path)
+    intrinsics, extrinsics, size, points, _, _ = perform_calibration(images, board_width, board_height, square_width, point_store, calibration_store, image_scaling)
+    # intrinsics, extrinsics, size, points, _, _ = perform_calibration( r"data/basement_1/images/*.JPG", 7, 4, 0.0885, image_scaling=0.25)
+    print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
+    utilities.create_corner_visualization_plt(images, board_width, board_height, points, 0.25)
 
 
 if __name__ == '__main__':
-    # intrinsics, extrinsics, size, points, _, _ = perform_calibration( r"data/basement_1/images/*.JPG", 7, 4, 0.0885, 'data/basement_1/chessboard_calib/corners.h5', 'data/basement_1/chessboard_calib/calib.h5', image_scaling=0.25)
-    corners = []
-    intrinsics, extrinsics, size, points, _, _ = perform_calibration( r"data/basement_1/images/*.JPG", 7, 4, 0.0885, image_scaling=0.25, corner_images=corners)
-    print( calculate_reprojection_error(intrinsics, extrinsics, points))
-
+    calibration_main('data/basement_1/images/*.JPG', 7, 4, 0.0885, 'data/basement_1/chessboard_calib/corners.h5', 'data/basement_1/chessboard_calib/calib.h5', image_scaling=0.25)
 
 
 
