@@ -1,10 +1,9 @@
-import numpy as np
 import cv2
-import glob
-import os
+import numpy as np
 import pandas as pd
+from pathlib import Path
+
 import utilities
-import matplotlib.pyplot as plt
 
 
 def detect_corners(images, h_corners, v_corners, square_width, img_scale):
@@ -67,32 +66,30 @@ def calibrate_chessboard( size, points):
     return intrinsics, extrinsics, pd.DataFrame(newcameramtx, columns=['fx', 'fy', 'c']), pd.Series(roi, index=['x', 'y', 'w', 'h'], name='roi')
 
 
-def perform_calibration(images, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0):
-    if os.path.exists(point_store):
+def perform_calibration(images, board_width, board_height, square_width, point_store, calibration_store, image_scaling=1.0):
+    if point_store.exists():
         size = pd.read_hdf(point_store, 'size')
         points = pd.read_hdf(point_store, 'points')
     else:
         size, points = detect_corners(images, board_width, board_height, square_width, image_scaling)
-        if point_store != '':
-            size.to_hdf(point_store, 'size', mode='w')
-            points.to_hdf(point_store, 'points', mode='a')
-    if os.path.exists(calibration_store):
+        size.to_hdf(point_store, 'size', mode='w')
+        points.to_hdf(point_store, 'points', mode='a')
+    if calibration_store.exists():
         intrinsics = pd.read_hdf(calibration_store, 'intrinsics')
         extrinsics = pd.read_hdf(calibration_store, 'extrinsics')
         newcameramtx = pd.read_hdf(calibration_store, 'newcameramtx')
         roi = pd.read_hdf(calibration_store, 'roi')
     else:
         intrinsics, extrinsics, newcameramtx, roi = calibrate_chessboard(size, points)
-        if calibration_store != '':
-            intrinsics.to_hdf(calibration_store, 'intrinsics', mode='w')
-            extrinsics.to_hdf(calibration_store, 'extrinsics', mode='a')
-            newcameramtx.to_hdf(calibration_store, 'newcameramtx', mode='a')
-            roi.to_hdf(calibration_store, 'roi', mode='a')
+        intrinsics.to_hdf(calibration_store, 'intrinsics', mode='w')
+        extrinsics.to_hdf(calibration_store, 'extrinsics', mode='a')
+        newcameramtx.to_hdf(calibration_store, 'newcameramtx', mode='a')
+        roi.to_hdf(calibration_store, 'roi', mode='a')
     return intrinsics, extrinsics, size, points, newcameramtx, roi
 
 
 def calibration_main(image_path, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0):
-    images = glob.glob(image_path)
+    images = list(image_path.glob('*.jpg'))
     intrinsics, extrinsics, size, points, _, _ = perform_calibration(images, board_width, board_height, square_width, point_store, calibration_store, image_scaling)
     # intrinsics, extrinsics, size, points, _, _ = perform_calibration( r"data/basement_1/images/*.JPG", 7, 4, 0.0885, image_scaling=0.25)
     print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
@@ -100,7 +97,7 @@ def calibration_main(image_path, board_width, board_height, square_width, point_
 
 
 if __name__ == '__main__':
-    calibration_main('data/basement_1/images/*.JPG', 7, 4, 0.0885, 'data/basement_1/chessboard_calib/corners.h5', 'data/basement_1/chessboard_calib/calib.h5', image_scaling=0.25)
+    calibration_main(Path('data/basement_1/images'), 7, 4, 0.0885, Path('data/basement_1/chessboard_calib/corners.h5'), Path('data/basement_1/chessboard_calib/calib.h5'), image_scaling=0.25)
 
 
 

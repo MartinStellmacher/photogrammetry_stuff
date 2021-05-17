@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 def read_scaled_image(fname, img_scale=1):
     # read all images in the same orientation
-    img = cv2.imread(fname, flags=cv2.IMREAD_IGNORE_ORIENTATION | cv2.IMREAD_GRAYSCALE)
+    img = cv2.imread(str(fname), flags=cv2.IMREAD_IGNORE_ORIENTATION | cv2.IMREAD_GRAYSCALE)
     # downscale because findChessboardCorners can't handle multi megapixel images :(
     if img_scale != 1:
         img = cv2.resize(img, (int(img.shape[1] * img_scale), int(img.shape[0] * img_scale)))
