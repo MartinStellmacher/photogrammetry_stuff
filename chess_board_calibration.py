@@ -1,9 +1,30 @@
 import cv2
 import numpy as np
 import pandas as pd
+import time
 from pathlib import Path
+import multiprocessing as mp
 
 import utilities
+
+
+def detect_corners_img(fname, img_scale, h_corners, v_corners, objp):
+    img = utilities.read_scaled_image(fname, img_scale)
+    # remember and check the size
+    im_size = img.shape[::-1]
+    # Find the chess board corners
+    ret, corners = cv2.findChessboardCorners(img, (h_corners, v_corners), None)
+    # If found, add object points, image points (after refining them)
+    if ret == True:
+        corners2 = cv2.cornerSubPix(img, corners, (11, 11), (-1, -1),
+                                    (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+        img_pt_df = pd.DataFrame(corners2.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'])
+        obj_pt_df = pd.DataFrame(objp, columns=['obj_pt_x', 'obj_pt_y', 'obj_pt_z'])
+        idx = pd.MultiIndex.from_product([[fname], img_pt_df.index], names=['image_file', 'point_idx'])
+        i_df = pd.concat([img_pt_df, obj_pt_df], axis=1).set_index(idx)
+        return fname, im_size, i_df
+    else:
+        return fname, im_size, None
 
 
 def detect_corners(images, h_corners, v_corners, square_width, img_scale):
@@ -12,24 +33,16 @@ def detect_corners(images, h_corners, v_corners, square_width, img_scale):
     objp[:, :2] = np.mgrid[0:h_corners, 0:v_corners].T.reshape(-1, 2) * square_width
     im_size = None
     result = None
-    for fname in images:
-        img = utilities.read_scaled_image(fname, img_scale)
-        # remember and check the size
+    pool = mp.Pool(max(1, mp.cpu_count()-2))
+    results = [pool.apply_async(detect_corners_img, args=(fname, img_scale, h_corners, v_corners, objp)) for fname in images]
+    for r in results:
+        fname, one_size, res = r.get()
         if im_size is None:
-            im_size = img.shape[::-1]
+            im_size = one_size
         else:
-            assert im_size == img.shape[::-1]
-        # Find the chess board corners
-        ret, corners = cv2.findChessboardCorners(img, (h_corners, v_corners), None)
-        # If found, add object points, image points (after refining them)
-        if ret == True:
-            corners2 = cv2.cornerSubPix(img, corners, (11, 11), (-1, -1),
-                                        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
-            img_pt_df = pd.DataFrame(corners2.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'])
-            obj_pt_df = pd.DataFrame(objp, columns=['obj_pt_x', 'obj_pt_y', 'obj_pt_z'])
-            idx = pd.MultiIndex.from_product([[fname], img_pt_df.index], names=['image_file', 'point_idx'])
-            i_df = pd.concat([img_pt_df, obj_pt_df], axis=1).set_index(idx)
-            result = pd.concat([result, i_df])
+            assert im_size == one_size
+        if res is not None:
+            result = pd.concat([result, res])
         else:
             print(f'{fname} failed')
     return pd.Series(im_size, index = ['width', 'height']), result
@@ -71,7 +84,9 @@ def perform_calibration(images, board_width, board_height, square_width, point_s
         size = pd.read_hdf(point_store, 'size')
         points = pd.read_hdf(point_store, 'points')
     else:
+        t0 = time.time()
         size, points = detect_corners(images, board_width, board_height, square_width, image_scaling)
+        print(f'detect_corners() in {time.time()-t0:0.1f}s')
         size.to_hdf(point_store, 'size', mode='w')
         points.to_hdf(point_store, 'points', mode='a')
     if calibration_store.exists():
@@ -80,7 +95,9 @@ def perform_calibration(images, board_width, board_height, square_width, point_s
         newcameramtx = pd.read_hdf(calibration_store, 'newcameramtx')
         roi = pd.read_hdf(calibration_store, 'roi')
     else:
+        t0 = time.time()
         intrinsics, extrinsics, newcameramtx, roi = calibrate_chessboard(size, points)
+        print(f'calibrate_chessboard() in {time.time()-t0:0.1f}s')
         intrinsics.to_hdf(calibration_store, 'intrinsics', mode='w')
         extrinsics.to_hdf(calibration_store, 'extrinsics', mode='a')
         newcameramtx.to_hdf(calibration_store, 'newcameramtx', mode='a')
