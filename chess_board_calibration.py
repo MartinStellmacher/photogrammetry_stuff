@@ -91,9 +91,8 @@ def perform_calibration(images, board_width, board_height, square_width, point_s
 def calibration_main(image_path, board_width, board_height, square_width, point_store='', calibration_store='', image_scaling=1.0):
     images = list(image_path.glob('*.jpg'))
     intrinsics, extrinsics, size, points, _, _ = perform_calibration(images, board_width, board_height, square_width, point_store, calibration_store, image_scaling)
-    # intrinsics, extrinsics, size, points, _, _ = perform_calibration( r"data/basement_1/images/*.JPG", 7, 4, 0.0885, image_scaling=0.25)
     print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
-    utilities.create_corner_visualization_plt(images, board_width, board_height, points, 0.25)
+    utilities.create_corner_visualization_files(Path('data/basement_1/chessboard_calib/out'), images, board_width, board_height, points, 0.25)
 
 
 if __name__ == '__main__':
