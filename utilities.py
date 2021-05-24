@@ -36,11 +36,11 @@ def create_one_corner_visualization_img(image, image_scaling, points, board_widt
     img = read_scaled_image(image, image_scaling)
     corner_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     try:
-        corners2 = points.loc[:, ('img_pt_x', 'img_pt_y')].to_numpy().reshape((-1, 1, 2))
+        corners2 = points.xs(image).loc[:, ('img_pt_x', 'img_pt_y')].to_numpy().reshape((-1, 1, 2))
         corner_img = cv2.drawChessboardCorners(corner_img, (board_width, board_height), corners2, True)
     except:
         corner_img = cv2.rectangle(corner_img, (0, 0), (corner_img.shape[1] - 1, corner_img.shape[0] - 1),
-                                   (255, 0, 0), 25)
+                                   (0, 0, 255), 25)
     if output_path is not None:
         cv2.imwrite(str(output_path / image.name), corner_img)
     return corner_img, image.name
@@ -48,8 +48,7 @@ def create_one_corner_visualization_img(image, image_scaling, points, board_widt
 
 def create_corner_visualization_images(images, board_width, board_height, points, image_scaling=1.0, output_path=None):
     pool = mp.Pool(max(1, mp.cpu_count()-2))
-    # todo stl: avoid omitting empty images (if in next line)
-    results = [pool.apply_async(create_one_corner_visualization_img, args=(img, image_scaling, points.xs(img), board_width, board_height, output_path)) for img in images if img in points.index.get_level_values(0)]
+    results = [pool.apply_async(create_one_corner_visualization_img, args=(img, image_scaling, points, board_width, board_height, output_path)) for img in images]
     return [r.get() for r in results]
 
 
