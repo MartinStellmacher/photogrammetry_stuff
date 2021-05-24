@@ -1,9 +1,8 @@
-import os
+import cv2
 import math
 import numpy as np
-import cv2
 import matplotlib.pyplot as plt
-
+import multiprocessing as mp
 
 def read_scaled_image(fname, img_scale=1):
     # read all images in the same orientation
@@ -33,17 +32,25 @@ def calculate_reprojection_error(intrinsics, extrinsics, points):
     return (mean_error/len(extrinsics))**0.5
 
 
-def create_corner_visualization_cv2(images, board_width, board_height, points, image_scaling=1.0):
-    for image in images:
-        img = read_scaled_image(image, image_scaling)
-        corner_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        try:
-            corners2 = points.xs(image).loc[:,('img_pt_x', 'img_pt_y')].to_numpy().reshape((-1,1,2))
-            corner_img = cv2.drawChessboardCorners(corner_img, (board_width, board_height), corners2, True)
-        except:
-            corner_img = cv2.rectangle(corner_img, (0, 0), (corner_img.shape[1]-1, corner_img.shape[0]-1), (0, 0, 255), 5)
-        cv2.imshow('markers', corner_img)
-        cv2.waitKey(-1)
+def create_one_corner_visualization_img(image, image_scaling, points, board_width, board_height, output_path=None):
+    img = read_scaled_image(image, image_scaling)
+    corner_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    try:
+        corners2 = points.loc[:, ('img_pt_x', 'img_pt_y')].to_numpy().reshape((-1, 1, 2))
+        corner_img = cv2.drawChessboardCorners(corner_img, (board_width, board_height), corners2, True)
+    except:
+        corner_img = cv2.rectangle(corner_img, (0, 0), (corner_img.shape[1] - 1, corner_img.shape[0] - 1),
+                                   (255, 0, 0), 25)
+    if output_path is not None:
+        cv2.imwrite(str(output_path / image.name), corner_img)
+    return corner_img, image.name
+
+
+def create_corner_visualization_images(images, board_width, board_height, points, image_scaling=1.0, output_path=None):
+    pool = mp.Pool(max(1, mp.cpu_count()-2))
+    # todo stl: avoid omitting empty images (if in next line)
+    results = [pool.apply_async(create_one_corner_visualization_img, args=(img, image_scaling, points.xs(img), board_width, board_height, output_path)) for img in images if img in points.index.get_level_values(0)]
+    return [r.get() for r in results]
 
 
 def create_corner_visualization_plt(images, board_width, board_height, points, image_scaling=1.0):
@@ -54,16 +61,20 @@ def create_corner_visualization_plt(images, board_width, board_height, points, i
         for y in range(square_dim):
             axs[y, x].get_xaxis().set_visible(False)
             axs[y, x].get_yaxis().set_visible(False)
-    for i, image in enumerate(images):
-        img = read_scaled_image(image, image_scaling)
-        corner_img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        try:
-            corners2 = points.xs(image).loc[:,('img_pt_x', 'img_pt_y')].to_numpy().reshape((-1,1,2))
-            corner_img = cv2.drawChessboardCorners(corner_img, (board_width, board_height), corners2, True)
-        except:
-            corner_img = cv2.rectangle(corner_img, (0, 0), (corner_img.shape[1]-1, corner_img.shape[0]-1), (255, 0, 0), 25)
+    results = create_corner_visualization_images(images, board_width, board_height, points, image_scaling=1.0)
+    for i, result in enumerate(results):
         ax = axs[math.floor(i / square_dim), math.floor(i % square_dim)]
-        ax.imshow(corner_img)
-        ax.set_title(os.path.basename(image))
+        ax.imshow(result[0])
+        ax.set_title(result[1])
     plt.show()
+
+
+def create_corner_visualization_files(output_path, images, board_width, board_height, points, image_scaling=1.0):
+    output_path.mkdir(parents=True, exist_ok=True)
+    for prev_result in output_path.glob('*.*'):
+        prev_result.unlink()
+    results = create_corner_visualization_images(images, board_width, board_height, points, image_scaling, output_path=output_path)
+
+
+
 
