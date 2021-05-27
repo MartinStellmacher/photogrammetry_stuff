@@ -3,43 +3,14 @@ import cv2
 import glob
 import os
 import pickle
-import matplotlib.pyplot as plt
 import pandas as pd
+import utilities
 
 
-img_path = r"C:\Users\stelli\Desktop\Photogrammetrie\data\basement_1\*.JPG"
+img_path = r"data/basement_1/images/*.JPG"
 
-dict_marker = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_250)
+
 dict_board = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-
-
-# todo: move to a separate file
-def detect_and_dump(img, dict):
-    corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(img, dict)
-    if ids is None:
-        print('\tNone')
-        return 0
-    else:
-        cv2.aruco.drawDetectedMarkers( img, corners, ids)
-        print(f'\t{len(ids)}\n\t\t{sorted(ids.ravel().tolist())}')
-        return len(ids)
-
-
-# todo: move to a separate file
-def check_all_images():
-    images = glob.glob(img_path)
-    for img in images:
-        print(img)
-        img = cv2.imread(img, flags=cv2.IMREAD_IGNORE_ORIENTATION + cv2.IMREAD_GRAYSCALE)
-
-        detect_and_dump(img, dict_marker)
-        detect_and_dump(img, dict_board)
-
-        out = cv2.resize(img, (int(img.shape[1]/4), int(img.shape[0]/4)))
-        cv2.imshow('markers', out)
-        cv2.waitKey(-1)
-
-    cv2.destroyWindow('markers')
 
 
 # todo: return DataFrame
@@ -50,17 +21,18 @@ def read_chessboards(images, board, dict):
 
     for im in images:
         print("=> Processing image {0}".format(im))
-        frame = cv2.imread(im, flags=cv2.IMREAD_IGNORE_ORIENTATION + cv2.IMREAD_GRAYSCALE)
+        frame = utilities.read_scaled_image(im)  # , img_scale=0.25)
+        # frame = cv2.imread(im, flags=cv2.IMREAD_IGNORE_ORIENTATION + cv2.IMREAD_GRAYSCALE)
         # first detect the markers
         corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(frame, dict)
         # then find the chessboard corners
         if len(corners)>0:
             # SUB PIXEL DETECTION
-            for corner in corners:
-                cv2.cornerSubPix(frame, corner,
-                                 winSize = (3,3),
-                                 zeroZone = (-1,-1),
-                                 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001))
+            # for corner in corners:
+            #     cv2.cornerSubPix(frame, corner,
+            #                      winSize = (3,3),
+            #                      zeroZone = (-1,-1),
+            #                      criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001))
             res2 = cv2.aruco.interpolateCornersCharuco(corners,ids,frame,board)
             if res2[1] is not None and res2[2] is not None and len(res2[1])>3:
                 allCorners.append(res2[1])
@@ -110,23 +82,6 @@ def calibrate_camera(allCorners, allIds, imsize, board):
     # pandas result: [nImg x (rvec, tvec, std_dev_ext, per_view_errors)],
 
 
-
-def show_undistortion( img_name, mtx, dist):
-    plt.figure()
-    frame = cv2.imread(img_name)
-    img_undist = cv2.undistort(frame, mtx, dist, None)
-    plt.subplot(1, 2, 1)
-    plt.imshow(frame)
-    plt.title("Raw image")
-    plt.axis("off")
-    plt.subplot(1, 2, 2)
-    plt.imshow(img_undist)
-    plt.title("Corrected image")
-    plt.axis("off")
-    plt.show()
-
-# check_all_images()
-
 # Markergröße Pixel: 731 [m]: 0.0619
 # Kachelgröße Pixel: 1045 [m]: 0.0885
 charuco_board = cv2.aruco.CharucoBoard_create(5, 8, 0.0885, 0.0619, dict_board)
@@ -140,7 +95,7 @@ else:
     with open('charuco_corners.pkl', 'wb') as f:
         pickle.dump( (allCorners, allIds, imsize), f)
 
-if os.path.exists( 'charuco_calibration_xxx.pkl'):
+if os.path.exists( 'charuco_calibration.pkl'):
     with open('charuco_calibration.pkl', 'rb') as f:
         ret, mtx, dist, rvecs, tvecs = pickle.load( f)
 else:
@@ -182,7 +137,7 @@ def reprojection_error( img_points, obj_points, rvecs, tvecs, imsize):
     # t = (target * 255.0 / target.max()).astype(np.uint8)
 
 
-    print( f'total error: {mean_error / len(obj_points)}')
+    # print( f'total error: {mean_error / len(obj_points)}')
 
 
 
@@ -191,41 +146,3 @@ reprojection_error( allCorners, charuco_board.chessboardCorners, rvecs, tvecs, i
 
 
 
-def draw_markers( file_name, dict, marker_size, mtx, dist):
-    frame = cv2.imread(file_name)
-    frame = cv2.undistort(src = frame, cameraMatrix = mtx, distCoeffs = dist)
-
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    parameters =  cv2.aruco.DetectorParameters_create()
-    corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(gray, dict,
-                                                          parameters=parameters)
-    # SUB PIXEL DETECTION
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
-    for corner in corners:
-        cv2.cornerSubPix(gray, corner, winSize = (3,3), zeroZone = (-1,-1), criteria = criteria)
-
-    rvecs,tvecs,_ = cv2.aruco.estimatePoseSingleMarkers(corners, marker_size , mtx, dist)
-    length_of_axis = 0.1
-    imaxis = cv2.aruco.drawDetectedMarkers(frame.copy(), corners, ids)
-
-    for i in range(len(tvecs)):
-        imaxis = cv2.aruco.drawAxis(imaxis, mtx, dist, rvecs[i], tvecs[i], length_of_axis)
-    plt.figure()
-    plt.imshow(imaxis)
-    plt.grid()
-    plt.show()
-
-for img in images:
-    draw_markers(img, dict_board, 0.0619, mtx, dist)
-    draw_markers(img, dict_marker, 0.20, mtx, dist)
-
-
-show_undistortion(images[-1], mtx, dist)
-
-# frame = cv2.drawChessboardCorners(frame, (7, 4), res2[1], True)
-# frame = cv2.resize(frame, (int(frame.shape[1] / 4), int(frame.shape[0] / 4)))
-# frame = cv2.resize(frame, tuple(np.floor_divide(np.array(frame.shape)[::-1], 4)))
-# rects = np.floor_divide(np.array(rejectedImgPoints, dtype=int),4)
-# cv2.polylines(frame, rects, True, (255, 255, 255), 3)        # for rect inrects:
-# cv2.imshow('frame', frame)
-# cv2.waitKey(500)
