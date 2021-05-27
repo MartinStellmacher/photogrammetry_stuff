@@ -10,11 +10,8 @@ import utilities
 
 def detect_corners_img(fname, img_scale, h_corners, v_corners, objp):
     img = utilities.read_scaled_image(fname, img_scale)
-    # remember and check the size
     im_size = img.shape[::-1]
-    # Find the chess board corners
     ret, corners = cv2.findChessboardCorners(img, (h_corners, v_corners), None)
-    # If found, add object points, image points (after refining them)
     if ret == True:
         corners2 = cv2.cornerSubPix(img, corners, (11, 11), (-1, -1),
                                     (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
