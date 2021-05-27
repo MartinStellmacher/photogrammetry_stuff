@@ -1,49 +1,79 @@
 import numpy as np
 import cv2
-import glob
-import os
+import time
+from pathlib import Path
 import pickle
 import pandas as pd
+import multiprocessing as mp
+import sys
+
 import utilities
 
 
-img_path = r"data/basement_1/images/*.JPG"
+def read_charucoboard(fname, img_scale, charuco_board_para, dict_type):
+    dict = cv2.aruco.getPredefinedDictionary(dict_type)
+    board = cv2.aruco.CharucoBoard_create(*charuco_board_para, dict)
+    frame = utilities.read_scaled_image(fname, img_scale=img_scale)
+    im_size = frame.shape[::-1]
+    corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(frame, dict)
+    if len(corners) > 0:
+        n_final, pts_final, ids_final = cv2.aruco.interpolateCornersCharuco(corners, ids, frame, board)
+        if pts_final is not None and ids_final is not None and n_final > 3:
+            img_pt_df = pd.DataFrame(pts_final.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'],
+                                     index=pd.MultiIndex.from_product([[fname], ids_final.reshape(-1)],
+                                                                      names=['image_file', 'point_id']))
+        return fname, im_size, img_pt_df
+    else:
+        return fname, im_size, None
 
 
-dict_board = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+def read_charucoboards(images, charuco_board_para, dict_type, image_scaling=1.0):
+    result = None
+    im_size = None
+    pool = mp.Pool(max(1, mp.cpu_count()-2))
+    results = [pool.apply_async(read_charucoboard, args=(fname, image_scaling, charuco_board_para, dict_type)) for fname in images]
+    for r in results:
+        fname, one_size, res = r.get()
+        if im_size is None:
+            im_size = one_size
+        else:
+            assert im_size == one_size
+        if res is not None:
+            result = pd.concat([result, res])
+        else:
+            print(f'{fname} failed')
+    return pd.Series(im_size, index = ['width', 'height']), result
 
 
-# todo: return DataFrame
-# todo: assert that all images are of same size
-def read_chessboards(images, board, dict):
-    allCorners = []
-    allIds = []
-
-    for im in images:
-        print("=> Processing image {0}".format(im))
-        frame = utilities.read_scaled_image(im)  # , img_scale=0.25)
-        # frame = cv2.imread(im, flags=cv2.IMREAD_IGNORE_ORIENTATION + cv2.IMREAD_GRAYSCALE)
+def read_charucoboards_seq(images, charuco_board_para, dict_type, image_scaling=1.0):
+    dict = cv2.aruco.getPredefinedDictionary(dict_type)
+    board = cv2.aruco.CharucoBoard_create(*charuco_board_para, dict)
+    result = None
+    im_size = None
+    for img in images:
+        print("=> Processing image {0}".format(img))
+        frame = utilities.read_scaled_image(img, img_scale=image_scaling)
+        # check size
+        if im_size is None:
+            im_size = frame.shape[::-1]
+        else:
+            assert im_size == frame.shape[::-1]
         # first detect the markers
         corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(frame, dict)
         # then find the chessboard corners
         if len(corners)>0:
-            # SUB PIXEL DETECTION
-            # for corner in corners:
-            #     cv2.cornerSubPix(frame, corner,
-            #                      winSize = (3,3),
-            #                      zeroZone = (-1,-1),
-            #                      criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.00001))
-            res2 = cv2.aruco.interpolateCornersCharuco(corners,ids,frame,board)
-            if res2[1] is not None and res2[2] is not None and len(res2[1])>3:
-                allCorners.append(res2[1])
-                allIds.append(res2[2])
-                if len( board.chessboardCorners) != res2[0]:
-                    print(f'\tdetected only {res2[0]} of {board.chessboardCorners} chessboard corners')
+            n_final, pts_final, ids_final = cv2.aruco.interpolateCornersCharuco(corners,ids,frame,board)
+            if pts_final is not None and ids_final is not None and n_final>3:
+                img_pt_df = pd.DataFrame(pts_final.reshape((-1, 2)), columns=['img_pt_x', 'img_pt_y'],
+                             index=pd.MultiIndex.from_product([[img], ids_final.reshape(-1)],
+                                                              names=['image_file', 'point_id']))
+                result = pd.concat([result, img_pt_df])
+                if len( board.chessboardCorners) != n_final:
+                    print(f'\tdetected only {n_final} of {board.chessboardCorners} chessboard corners')
             else:
                 print('\tfailed')
+    return pd.Series(im_size, index = ['width', 'height']), result
 
-    imsize = frame.shape[::-1]
-    return allCorners, allIds, imsize
 
 # todo: second path without 10 worst images
 # todo: return Dataframe
@@ -82,32 +112,54 @@ def calibrate_camera(allCorners, allIds, imsize, board):
     # pandas result: [nImg x (rvec, tvec, std_dev_ext, per_view_errors)],
 
 
+def perform_calibration( images, board_width, board_height, square_width, marker_width, dict_type, point_store, calibration_store, image_scaling=1.0):
+    charuco_board_para = (board_width, board_height, square_width, marker_width)
+    if point_store.exists():
+        with point_store.open('rb') as f:
+            allCorners, allIds, imsize = pickle.load( f)
+    else:
+        t0 = time.time()
+        im_size, corners = read_charucoboards(images, charuco_board_para, dict_type, image_scaling)
+        print(f'{time.time()-t0:0.1f}s')
+        sys.exit()
+        # with point_store.open('wb') as f:
+        #     pickle.dump((allCorners, allIds, imsize), f)
+
+    # if os.path.exists( 'charuco_calibration.pkl'):
+    #     with open('charuco_calibration.pkl', 'rb') as f:
+    #         ret, mtx, dist, rvecs, tvecs = pickle.load( f)
+    # else:
+    #     ret, mtx, dist, rvecs, tvecs = calibrate_camera(allCorners, allIds, imsize, charuco_board)
+    #     with open('charuco_calibration.pkl', 'wb') as f:
+    #         pickle.dump( (ret, mtx, dist, rvecs, tvecs), f)
+
+
+def calibration_main(image_path, board_width, board_height, square_width, marker_width, dict_type, point_store='',
+                     calibration_store='', image_scaling=1.0):
+    images = list(image_path.glob('*.jpg'))
+    intrinsics, extrinsics, size, points, _, _ = perform_calibration(images, board_width, board_height, square_width,
+                                                                     marker_width, dict_type, point_store,
+                                                                     calibration_store, image_scaling)
+    print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
+    utilities.create_corner_visualization_files(Path('data/basement_1/chessboard_calib/out'), images, board_width,
+                                                board_height, points, 0.25)
+
+
 # Markergröße Pixel: 731 [m]: 0.0619
 # Kachelgröße Pixel: 1045 [m]: 0.0885
-charuco_board = cv2.aruco.CharucoBoard_create(5, 8, 0.0885, 0.0619, dict_board)
-images = glob.glob(img_path)
+if __name__ == '__main__':
+    calibration_main(Path('data/basement_1/images'), 5, 8, 0.0885, 0.0619,
+                     cv2.aruco.DICT_4X4_50,
+                     Path('data/basement_1/charuco_calib/corners.h5'),
+                     Path('data/basement_1/charuco_calib/calib.h5'), image_scaling=0.25)
 
-if os.path.exists( 'charuco_corners.pkl'):
-    with open('charuco_corners.pkl', 'rb') as f:
-        allCorners, allIds, imsize = pickle.load( f)
-else:
-    allCorners, allIds, imsize = read_chessboards(images, charuco_board, dict_board)
-    with open('charuco_corners.pkl', 'wb') as f:
-        pickle.dump( (allCorners, allIds, imsize), f)
 
-if os.path.exists( 'charuco_calibration.pkl'):
-    with open('charuco_calibration.pkl', 'rb') as f:
-        ret, mtx, dist, rvecs, tvecs = pickle.load( f)
-else:
-    ret, mtx, dist, rvecs, tvecs = calibrate_camera(allCorners, allIds, imsize, charuco_board)
-    with open('charuco_calibration.pkl', 'wb') as f:
-        pickle.dump( (ret, mtx, dist, rvecs, tvecs), f)
 
-print(imsize)
-print(np.array(imsize)/2)
-print(ret)
-print(mtx)
-print(dist.ravel().tolist())
+# print(imsize)
+# print(np.array(imsize)/2)
+# print(ret)
+# print(mtx)
+# print(dist.ravel().tolist())
 
 
 def reprojection_error( img_points, obj_points, rvecs, tvecs, imsize):
@@ -141,7 +193,7 @@ def reprojection_error( img_points, obj_points, rvecs, tvecs, imsize):
 
 
 
-reprojection_error( allCorners, charuco_board.chessboardCorners, rvecs, tvecs, imsize)
+# reprojection_error( allCorners, charuco_board.chessboardCorners, rvecs, tvecs, imsize)
 
 
 
