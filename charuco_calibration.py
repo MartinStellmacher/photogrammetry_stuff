@@ -46,7 +46,7 @@ def detect_charucoboards(images, charuco_board_para, dict_type, image_scaling=1.
     return pd.Series(im_size, index = ['width', 'height']), result
 
 
-def calibrate_charuco(points, imsize, board):
+def calibrate_charuco(points, imsize, board):  # todo stl: feed focal length guess ...
     # fx == fy, absolute value has no meaning if CALIB_FIX_ASPECT_RATIO is specified
     # assume perfectly centered optics for the start
     cameraMatrixInit = np.array([[ 1000.,    0., imsize.width/2.],
@@ -123,9 +123,9 @@ def calibration_main(image_path, board_width, board_height, square_width, marker
     intrinsics, extrinsics, size, points, _, _ = perform_calibration(images, board_width, board_height, square_width,
                                                                      marker_width, dict_type, point_store,
                                                                      calibration_store, image_scaling)
-    print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
-    utilities.create_corner_visualization_files(Path('data/basement_1/chessboard_calib/out'), images, board_width,
-                                                board_height, points, 0.25)
+    # todo stl ... print( utilities.calculate_reprojection_error(intrinsics, extrinsics, points))
+    # todo stl ... utilities.create_corner_visualization_files(Path('data/basement_1/chessboard_calib/out'), images, board_width,
+    # todo stl ...                                                 board_height, points, 0.25)
 
 
 # Markergröße Pixel: 731 [m]: 0.0619
@@ -134,15 +134,7 @@ if __name__ == '__main__':
     calibration_main(Path('data/basement_1/images'), 5, 8, 0.0885, 0.0619,
                      cv2.aruco.DICT_4X4_50,
                      Path('data/basement_1/charuco_calib/corners.h5'),
-                     Path('data/basement_1/charuco_calib/calib.h5'), image_scaling=0.25)
-
-
-
-# print(imsize)
-# print(np.array(imsize)/2)
-# print(ret)
-# print(mtx)
-# print(dist.ravel().tolist())
+                     Path('data/basement_1/charuco_calib/calib.h5'))  # , image_scaling=0.25)
 
 
 def reprojection_error( img_points, obj_points, rvecs, tvecs, imsize):
